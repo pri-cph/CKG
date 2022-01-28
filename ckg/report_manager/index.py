@@ -814,7 +814,7 @@ def main():
     print("IN MAIN")
     celery_working_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(celery_working_dir)
-    queues = [('creation', 1, 'INFO'), ('compute', 3, 'INFO'), ('update', 1, 'INFO')]
+    queues = [('creation', 1, 'DEBUG'), ('compute', 3, 'DEBUG'), ('update', 1, 'DEBUG')]
     for queue, processes, log_level in queues:
         celery_cmdline = 'celery -A ckg.report_manager.worker worker --loglevel={} --concurrency={} -E -Q {}'.format(log_level, processes, queue).split(" ")
         print("Ready to call {} ".format(celery_cmdline))

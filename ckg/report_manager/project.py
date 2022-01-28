@@ -386,6 +386,7 @@ class Project:
 
     def build_project(self, force=False):
         if self.check_report_exists() and not force:
+            print("PROJECT EXISTS")
             self.load_project_report()
         elif force:
             self.report = {}
@@ -393,6 +394,7 @@ class Project:
 
         if len(self.report) == 0 or len(self.datasets) == 0:
             project_info = self.query_data()
+            print("QUERYING PROJECT DATA")
             if len(project_info) > 0:
                 self.set_attributes(project_info)
                 self.get_similar_projects(project_info)
@@ -404,6 +406,8 @@ class Project:
                         if "proteomics" in self.configuration_files:
                             configuration = ckg_utils.get_configuration(self.configuration_files["proteomics"])
                         dataset = ProteomicsDataset(self.identifier, data={}, configuration=configuration, analysis_queries={}, report=None)
+                        print("PROTEOMICS DATASET")
+                        print(dataset)
                     elif data_type == "clinical":
                         if "clinical" in self.configuration_files:
                             configuration = ckg_utils.get_configuration(self.configuration_files["clinical"])
@@ -586,6 +590,7 @@ class Project:
 
     def generate_report(self):
         if len(self.report) == 0:
+            print("GENERATING REPORT")
             project_report = self.generate_project_info_report()
             self.update_report({"Project information": project_report})
             for dataset_type in self.data_types:

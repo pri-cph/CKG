@@ -93,6 +93,7 @@ class Analysis:
             elif self.analysis_type == "pca":
                 components = 2
                 drop_cols = []
+                # sample = 'sample'
                 group = 'group'
                 annotation_cols = []
                 if "components" in self.args:
@@ -229,10 +230,12 @@ class Analysis:
                     self.result[pair] = ttest_result
             elif self.analysis_type == 'anova':
                 start = time.time()
+                bait = []
                 alpha = 0.05
                 drop_cols = []
                 group = 'group'
                 subject = 'subject'
+                control_group = None
                 permutations = 50
                 is_logged = True
                 correction = 'fdr_bh'
@@ -244,14 +247,21 @@ class Analysis:
                     subject = self.args['subject']
                 if "group" in self.args:
                     group = self.args["group"]
+                if "control_group" in self.args:
+                    control_group = self.args["control_group"]
                 if "permutations" in self.args:
                     permutations = self.args["permutations"]
                 if "is_logged" in self.args:
                     is_logged = self.args['is_logged']
                 if 'correction_method' in self.args:
                     correction = self.args['correction_method']
-                anova_result = analytics.run_anova(self.data, drop_cols=drop_cols, subject=subject, group=group, alpha=alpha, permutations=permutations, is_logged=is_logged, correction=correction)
-                self.result[self.analysis_type] = anova_result
+                if "bait" in self.args:
+                    if self.args["bait"] in self.data:
+                        bait = self.data[self.args["bait"]]["bait"]
+                if "data" in self.args:
+                    if self.args["data"] in self.data:
+                        anova_result = analytics.run_anova(self.data[self.args["data"]], bait=bait, drop_cols=drop_cols, subject=subject, group=group, control_group=control_group, alpha=alpha, permutations=permutations, is_logged=is_logged, correction=correction)
+                        self.result[self.analysis_type] = anova_result
             elif self.analysis_type == 'ancova':
                 alpha = 0.05
                 drop_cols = []
@@ -308,11 +318,13 @@ class Analysis:
                     self.result[self.analysis_type] = analytics.run_qc_markers_analysis(processed_data, qcmarkers, sample_col, group_col, drop_cols, identifier_col, qcidentifier_col, qcclass_col)
             elif self.analysis_type == 'samr':
                 start = time.time()
+                bait = []
                 alpha = 0.05
                 s0 = None
                 drop_cols = []
                 group = 'group'
                 subject = 'subject'
+                control_group = None
                 permutations = 250
                 fc = 0
                 is_logged = True
@@ -324,6 +336,8 @@ class Analysis:
                     subject = self.args['subject']
                 if "group" in self.args:
                     group = self.args["group"]
+                if "control_group" in self.args:
+                    control_group = self.args["control_group"]
                 if "s0" in self.args:
                     s0 = self.args["s0"]
                 if "permutations" in self.args:
@@ -332,8 +346,13 @@ class Analysis:
                     fc = self.args['fc']
                 if "is_logged" in self.args:
                     is_logged = self.args['is_logged']
-                anova_result = analytics.run_samr(self.data, drop_cols=drop_cols, subject=subject, group=group, alpha=alpha, s0=s0, permutations=permutations, fc=fc, is_logged=is_logged)
-                self.result[self.analysis_type] = anova_result
+                if "bait" in self.args:
+                    if self.args["bait"] in self.data:
+                        bait = self.data[self.args["bait"]]["bait"]
+                if "data" in self.args:
+                    if self.args["data"] in self.data:
+                        anova_result = analytics.run_samr(self.data[self.args["data"]], bait=bait, drop_cols=drop_cols, subject=subject, group=group, control_group=control_group, alpha=alpha, s0=s0, permutations=permutations, fc=fc, is_logged=is_logged)
+                        self.result[self.analysis_type] = anova_result
             elif self.analysis_type == '2-way anova':
                 drop_cols = []
                 subject = 'subject'
@@ -348,6 +367,7 @@ class Analysis:
                 self.result[self.analysis_type] = two_way_anova_result
             elif self.analysis_type == "repeated_measurements_anova":
                 start = time.time()
+                bait = []
                 alpha = 0.05
                 drop_cols = []
                 within = 'group'
@@ -360,14 +380,21 @@ class Analysis:
                     drop_cols = self.args['drop_cols']
                 if "group" in self.args:
                     within = self.args["within"]
+                    group = self.args["within"]
                 if "subject" in self.args:
                     subject = self.args["subject"]
                 if "permutations" in self.args:
                     permutations = self.args["permutations"]
                 if 'correction_method' in self.args:
                     correction = self.args['correction_method']
-                anova_result = analytics.run_repeated_measurements_anova(self.data, drop_cols=drop_cols, subject=subject, within=within, alpha=alpha, permutations=permutations, correction=correction)
-                self.result[self.analysis_type] = anova_result
+                if "bait" in self.args:
+                    if self.args["bait"] in self.data:
+                        if "bait" in self.data[self.args["bait"]]:
+                            bait = self.data[self.args["bait"]]["bait"]
+                if "data" in self.args:
+                    if self.args["data"] in self.data:
+                        anova_result = analytics.run_repeated_measurements_anova(self.data[self.args["data"]], bait=bait, drop_cols=drop_cols, subject=subject, group=group, within=within, alpha=alpha, permutations=permutations, correction=correction)
+                        self.result[self.analysis_type] = anova_result
             elif self.analysis_type == "mixed_anova":
                 start = time.time()
                 alpha = 0.05
@@ -782,10 +809,16 @@ class Analysis:
             elif name == 'pca':
                 x_title = "x"
                 y_title = "y"
+                group = "group"
+                sample = "sample"
                 if "x_title" in self.args:
                     x_title = self.args["x_title"]
                 if "y_title" in self.args:
                     y_title = self.args["y_title"]
+                if "group" not in self.args:
+                    self.args["group"] = group
+                if "sample" not in self.args:
+                    self.args["sample"] = sample
                 for id in self.result:
                     if isinstance(id, tuple):
                         identifier = identifier+"_"+id[0]+"_vs_"+id[1]

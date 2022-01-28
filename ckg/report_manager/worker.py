@@ -34,8 +34,11 @@ def create_new_identifiers(project_id, data, directory, filename):
 @celery_app.task
 def generate_project_report(project_id, config_files, force):
     p = project.Project(project_id, datasets={}, knowledge=None, report={}, configuration_files=config_files)
+    print("DONE CREATING PROJECT OBJECT")
     p.build_project(force)
+    print("DONE BUILDING PROJECT")
     p.generate_report()
+    print("REPORT GENERATED")
 
     return {str(p.identifier): "Done"}
 

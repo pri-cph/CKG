@@ -170,6 +170,8 @@ data exploration:
             y_title: PC2
             components: 2
             init: 'pca'
+            display_loadings: True
+            marker_size: 15
             width: 1000
             height: 700
             loadings: 15
@@ -202,6 +204,8 @@ data exploration:
             y_title: PC2
             components: 2
             factor: 1
+            display_loadings: True
+            marker_size: 15
             width: 1000
             height: 700
             loadings: 15

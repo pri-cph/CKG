@@ -810,9 +810,11 @@ def run_volcano(data, identifier, args={'alpha':0.05, 'fc':2, 'colorscale':'Blue
 
     Example::
 
-        result = run_volcano(data, identifier='volvano data', args={'alpha':0.05, 'fc':2.0, 'colorscale':'Blues', 'showscale':False, 'marker_size':6, 'x_title':'log2FC', \
+        result = run_volcano(data, identifier='volcano data', args={'alpha':0.05, 'fc':2.0, 'colorscale':'Blues', 'showscale':False, 'marker_size':6, 'x_title':'log2FC', \
                             'y_title':'-log10(pvalue)', 'num_annotations':10})
     """
+    bait, data = data
+
     # Loop through signature
     volcano_plot_results = {}
     grouping = data.groupby(['group1','group2'])
@@ -824,6 +826,7 @@ def run_volcano(data, identifier, args={'alpha':0.05, 'fc':2, 'colorscale':'Blue
         line_colors = []
         text = []
         annotations = []
+        annotated_proteins = args['annotate_list'] if 'annotate_list' in args and len(args['annotate_list']) > 0 else []
         num_annotations = args['num_annotations'] if 'num_annotations' in args else 10
         gidentifier = identifier + "_".join(map(str,group))
         title = 'Comparison: '+str(group[0])+' vs '+str(group[1])
@@ -846,66 +849,97 @@ def run_volcano(data, identifier, args={'alpha':0.05, 'fc':2, 'colorscale':'Blue
             text.append('<b>'+str(row['identifier'])+": "+str(index)+'<br>Comparison: '+str(row['group1'])+' vs '+str(row['group2'])+'<br>log2FC = '+str(round(row['log2FC'], ndigits=2))+'<br>p = '+'{:.2e}'.format(row[pval_col])+'<br>FDR = '+'{:.2e}'.format(row[padj_col]))
 
             # Color
-            if row[padj_col] < args['alpha']:
-                pvals.append(row['-log10 pvalue'])
-                sig_pval = True
-                if row['log2FC'] <= -np.log2(args['fc']):
-                    annotations.append({'x': row['log2FC'],
-                                    'y': row['-log10 pvalue'],
-                                    'xref':'x',
-                                    'yref': 'y',
-                                    'text': str(row['identifier']),
-                                    'showarrow': False,
-                                    'ax': 0,
-                                    'ay': -10,
-                                    'font': dict(color = "#2c7bb6", size = 13)})
-                    color.append('rgba(44, 123, 182, 0.7)')
-                    color_dict[row['identifier']] = "#2c7bb6"
-                    line_colors.append('#2c7bb6')
-                elif row['log2FC'] >= np.log2(args['fc']):
-                    annotations.append({'x': row['log2FC'],
-                                    'y': row['-log10 pvalue'],
-                                    'xref':'x',
-                                    'yref': 'y',
-                                    'text': str(row['identifier']),
-                                    'showarrow': False,
-                                    'ax': 0,
-                                    'ay': -10,
-                                    'font': dict(color = "#d7191c", size = 13)})
-                    color.append('rgba(215, 25, 28, 0.7)')
-                    color_dict[row['identifier']] = "#d7191c"
-                    line_colors.append('#d7191c')
-                elif row['log2FC'] < 0.:
-                    color.append('rgba(171, 217, 233, 0.5)')
-                    color_dict[row['identifier']] = '#abd9e9'
-                    line_colors.append('#abd9e9')
-                elif row['log2FC'] > 0.:
-                    color.append('rgba(253, 174, 97, 0.5)')
-                    color_dict[row['identifier']] = '#fdae61'
-                    line_colors.append('#fdae61')
+            if bait and any(item in row['identifier'] for item in bait):
+                annotations.append({'x': row['log2FC'],
+                                'y': row['-log10 pvalue'],
+                                'xref':'x',
+                                'yref': 'y',
+                                'text': str(row['identifier']).split('~')[0],
+                                'showarrow': False,
+                                'ax': 0,
+                                'ay': -10,
+                                'font': dict(color = "#c9ac0a", size = 13),
+                                'yshift':10})
+                color.append('rgba(243,211,33, 1)')
+                color_dict[row['identifier']] = '#f3d321'
+                line_colors.append('#f3d321')
+            else:
+                if row[padj_col] < args['alpha']:
+                    pvals.append(row['-log10 pvalue'])
+                    sig_pval = True
+                    if row['log2FC'] <= -np.log2(args['fc']):
+                        if row['identifier'] in annotated_proteins:
+                            annotations.append({'x': row['log2FC'],
+                                            'y': row['-log10 pvalue'],
+                                            'xref':'x',
+                                            'yref': 'y',
+                                            'text': str(row['identifier']).split('~')[0],
+                                            'showarrow': False,
+                                            'ax': 0,
+                                            'ay': -10,
+                                            'font': dict(color = "#119229", size = 13),
+                                            'yshift':10})
+                            color.append('rgba(17, 146, 41, 0.7)')
+                            color_dict[row['identifier']] = "#119229"
+                            line_colors.append("#119229")
+                        else:
+                            annotations.append({'x': row['log2FC'],
+                                            'y': row['-log10 pvalue'],
+                                            'xref':'x',
+                                            'yref': 'y',
+                                            'text': str(row['identifier']).split('~')[0],
+                                            'showarrow': False,
+                                            'ax': 0,
+                                            'ay': -10,
+                                            'font': dict(color = "#2c7bb6", size = 13),
+                                            'yshift':10})
+                            color.append('rgba(44, 123, 182, 0.7)')
+                            color_dict[row['identifier']] = "#2c7bb6"
+                            line_colors.append('#2c7bb6')
+                    elif row['log2FC'] >= np.log2(args['fc']):
+                        if row['identifier'] in annotated_proteins:
+                            annotations.append({'x': row['log2FC'],
+                                            'y': row['-log10 pvalue'],
+                                            'xref':'x',
+                                            'yref': 'y',
+                                            'text': str(row['identifier']).split('~')[0],
+                                            'showarrow': False,
+                                            'ax': 0,
+                                            'ay': -10,
+                                            'font': dict(color = "#119229", size = 13),
+                                            'yshift':10})
+                            color.append('rgba(17, 146, 41, 0.7)')
+                            color_dict[row['identifier']] = "#119229"
+                            line_colors.append("#119229")
+                        else:
+                            annotations.append({'x': row['log2FC'],
+                                            'y': row['-log10 pvalue'],
+                                            'xref':'x',
+                                            'yref': 'y',
+                                            'text': str(row['identifier']).split('~')[0],
+                                            'showarrow': False,
+                                            'ax': 0,
+                                            'ay': -10,
+                                            'font': dict(color = "#d7191c", size = 13),
+                                            'yshift':10})
+                            color.append('rgba(215, 25, 28, 0.7)')
+                            color_dict[row['identifier']] = "#d7191c"
+                            line_colors.append('#d7191c')
+                    elif row['log2FC'] < 0.:
+                        color.append('rgba(171, 217, 233, 0.5)')
+                        color_dict[row['identifier']] = '#abd9e9'
+                        line_colors.append('#abd9e9')
+                    elif row['log2FC'] > 0.:
+                        color.append('rgba(253, 174, 97, 0.5)')
+                        color_dict[row['identifier']] = '#fdae61'
+                        line_colors.append('#fdae61')
+                    else:
+                        color.append('rgba(153, 153, 153, 0.3)')
+                        color_dict[row['identifier']] = '#999999'
+                        line_colors.append('#999999')
                 else:
                     color.append('rgba(153, 153, 153, 0.3)')
-                    color_dict[row['identifier']] = '#999999'
                     line_colors.append('#999999')
-            else:
-                color.append('rgba(153, 153, 153, 0.3)')
-                line_colors.append('#999999')
-
-        if 'annotate_list' in args:
-            if len(args['annotate_list']) > 0:
-                annotations = []
-                hits = args['annotate_list']
-                selected = signature[signature['identifier'].isin(hits)]
-                for index, row in selected.iterrows():
-                    annotations.append({'x': row['log2FC'],
-                                    'y': row['-log10 pvalue'],
-                                    'xref':'x',
-                                    'yref': 'y',
-                                    'text': str(row['identifier']),
-                                    'showarrow': False,
-                                    'ax': 0,
-                                    'ay': -10,
-                                    'font': dict(color = color_dict[row['identifier']], size = 12)})
 
         if len(annotations) < num_annotations:
             num_annotations = len(annotations)
@@ -1307,6 +1341,11 @@ def get_network(data, identifier, args):
                         min_node_size = min(degrees.values())
                         max_node_size = max(degrees.values())
                         nx.set_node_attributes(graph, degrees, 'radius')
+                else:
+                    node_size = data[args['node_size']]
+                    min_node_size = min(node_size)
+                    max_node_size = max(node_size)
+                    nx.set_node_attributes(graph, node_size, 'radius')
 
                 clusters = analytics.get_network_communities(graph, args)
                 col = utils.get_hex_colors(len(set(clusters.values())))
@@ -1332,9 +1371,9 @@ def get_network(data, identifier, args):
                         valid_nodes = []
                         for c in valid_clusters:
                             valid_nodes.extend(cluster_members[c])
-                            if len(valid_nodes) >= max_nodes:
-                                valid_nodes = valid_nodes[0:max_nodes]
-                                break
+                            # if len(valid_nodes) >= max_nodes:
+                            #     valid_nodes = valid_nodes[0:max_nodes]
+                            #     break
                         vis_graph = vis_graph.subgraph(valid_nodes)
 
                 nodes_table, edges_table = network_to_tables(graph, source=args["source"], target=args["target"])
@@ -1384,6 +1423,8 @@ def get_network_style(node_colors, color_edges):
                 'idealEdgeLength': 100,
                 'nodeOverlap': 20,
                 'refresh': 20,
+                'fit': True,
+                'padding': 30,
                 'randomize': False,
                 'componentSpacing': 100,
                 'nodeRepulsion': 400000,
@@ -1489,56 +1530,73 @@ def get_pca_plot(data, identifier, args):
         result = get_pca_plot(data, identifier='pca', args={'loadings':15, 'title':'PCA Plot', 'x_title':'PC1', 'y_title':'PC2', 'height':100, 'width':100})
     """
     pca_data, loadings, variance = data
-    figure = {}
-    traces = []
-    annotations = []
     sct = get_scatterplot(pca_data, identifier, args).figure
-    traces.extend(sct['data'])
-    figure['layout'] = sct['layout']
-    factor = 50
-    num_loadings = 15
-    if 'factor' in args:
-        factor = args['factor']
-    if 'loadings' in args:
-        num_loadings = args['loadings']
 
-    for index in list(loadings.index)[0:num_loadings]:
-        x = loadings.loc[index,'x'] * factor
-        y = loadings.loc[index, 'y'] * factor
-        value = loadings.loc[index, 'value']
+    if args['display_loadings']:
+        figure = {}
+        traces = []
+        traces_updated = []
+        annotations = []
+        traces.extend(sct['data'])
+        figure['layout'] = sct['layout']
+        factor = 50
+        num_loadings = 15
+        if 'factor' in args:
+            factor = args['factor']
+        if 'loadings' in args:
+            num_loadings = args['loadings']
 
-        trace = go.Scattergl(x= [0,x],
-                        y = [0,y],
-                        mode='markers+lines',
-                        text=str(index)+" loading: {0:.2f}".format(value),
-                        name = index,
-                        marker= dict(size=3,
-                                    symbol=1,
-                                    color='darkgrey', #set color equal to a variable
-                                    showscale=False,
-                                    opacity=0.9,
-                                    ),
-                        showlegend=False,
-                        )
-        annotation = dict( x=x * 1.15,
-                        y=y * 1.15,
-                        xref='x',
-                        yref='y',
-                        text=index,
-                        showarrow=False,
-                        font=dict(
-                                size=12,
-                                color='darkgrey'
-                            ),
-                            align='center',
-                            ax=20,
-                            ay=-30,
+        for t in traces:
+            t['marker']['size'] = args['marker_size']
+            traces_updated.append(t)
+
+        for index in list(loadings.index)[0:num_loadings]:
+            x = loadings.loc[index,'x'] * factor
+            y = loadings.loc[index, 'y'] * factor
+            value = loadings.loc[index, 'value']
+
+            trace = go.Scattergl(x= [0,x],
+                            y = [0,y],
+                            mode='markers+lines',
+                            text=str(index)+" loading: {0:.2f}".format(value),
+                            name = index,
+                            marker= dict(size=3,
+                                        symbol=1,
+                                        color='darkgrey', #set color equal to a variable
+                                        showscale=False,
+                                        opacity=0.7,
+                                        ),
+                            showlegend=False,
                             )
-        annotations.append(annotation)
-        traces.append(trace)
+            annotation = dict( x=x * 1.15,
+                            y=y * 1.15,
+                            xref='x',
+                            yref='y',
+                            text=index,
+                            showarrow=False,
+                            font=dict(
+                                    size=11,
+                                    color='darkgrey'
+                                ),
+                                align='center',
+                                ax=20,
+                                ay=-30,
+                                )
+            annotations.append(annotation)
+            traces_updated.append(trace)
 
-    figure['data'] = traces
-    figure['layout'].annotations = annotations
+        figure['data'] = traces_updated
+        figure['layout'].annotations = annotations
+
+    else:
+        annotations = defaultdict(list)
+        for i in pca_data[args['group']].unique():
+            text = pca_data[pca_data[args['group']] == i][args['sample']].tolist()
+            annotations[i]=text
+        figure = go.Figure(data=sct['data'], layout=sct['layout'])
+        for g in annotations.keys():
+            figure.update_traces(text=annotations[g], mode='markers+text', marker=dict(size=args['marker_size']), selector=dict(name=g))
+
     figure['layout']['template'] = 'plotly_white'
 
     return  dcc.Graph(id = identifier, figure = figure)
@@ -2483,10 +2541,13 @@ def get_enrichment_plots(enrichment_results, identifier, args):
         figure = get_enrichment_plots(df, identifier='enrichment', args={'width':1500, 'height':800, 'title':'Enrichment'})
     """
     figures = []
+    min_proteins = 2
     width = 900
     height = 800
     colors = {'upregulated': '#cb181d', 'downregulated': '#3288bd', 'regulated': '#ae017e', 'non-regulated': '#fcc5c0'}
     title = "Enrichment"
+    if 'min_proteins' in args:
+        min_proteins = args['min_proteins']
     if 'width' in args:
         width = args['width']
     if 'height' in args:
@@ -2503,7 +2564,7 @@ def get_enrichment_plots(enrichment_results, identifier, args):
         group = 'direction'
         nid = identifier+'_{}_{}'.format(g1, g2)
         if not enrichment_results[g].empty:
-            df = enrichment_results[g][enrichment_results[g].rejected]
+            df = enrichment_results[g][(enrichment_results[g].rejected) & (enrichment_results[g]['foreground']>=int(min_proteins))]
             if 'direction' not in df:
                 group = None
             if not df.empty:
