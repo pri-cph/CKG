@@ -720,7 +720,7 @@ def transform_proteomics_edgelist(df, index_cols=['group', 'sample', 'subject'],
     return wdf
 
 
-def get_proteomics_measurements_ready(df, index_cols=['group', 'sample', 'subject'], drop_cols=['sample'], group='group', identifier='identifier', extra_identifier='name', filter_samples=False, filter_samples_percent=0.5, imputation=True, imputation_method='distribution', missing_method='percentage', missing_per_group=True, missing_max=0.3, min_valid=1, value_col='LFQ_intensity', shift=1.8, nstd=0.3, knn_cutoff=0.6, normalize=False, normalization_method='median', normalize_group=False, normalize_by=None):
+def get_proteomics_measurements_ready(df, index_cols=['group', 'sample', 'subject'], drop_cols=['sample'], group='group', identifier='identifier', extra_identifier='name', filter_samples=False, filter_samples_percent=0.5, imputation=True, imputation_method='distribution', missing_method='percentage', missing_per_group=True, missing_cutoff=0.3, value_col='LFQ_intensity', shift=1.8, nstd=0.3, knn_cutoff=0.6, normalize=False, normalization_method='median', normalize_group=False, normalize_by=None):
     """
     Processes proteomics data extracted from the database: 1) filter proteins with high number of missing values (> missing_max or min_valid), 2) impute missing values.
 
@@ -766,9 +766,15 @@ def get_proteomics_measurements_ready(df, index_cols=['group', 'sample', 'subjec
         if not missing_per_group:
             g = None
         if missing_method == 'at_least_x':
-            aux.extend(extract_number_missing(df, min_valid, drop_cols, group=g))
+            if isinstance(missing_cutoff, int) and (missing_cutoff>=0 or missing_cutoff<= df.shape[0]):
+                aux.extend(extract_number_missing(df, missing_cutoff, drop_cols, group=g))
+            else:
+                print('"missing_cutoff" needs to be an integer between {} and {}.'.format(0, df.shape[0]))
         elif missing_method == 'percentage':
-            aux.extend(extract_percentage_missing(df,  missing_max, drop_cols, group=g))
+            if missing_cutoff>=0.0 and missing_cutoff<= 1.0:
+                aux.extend(extract_percentage_missing(df,  missing_cutoff, drop_cols, group=g))
+            else:
+                print('"missing_cutoff" needs to be a float between 0 and 1.')
 
         df = df[list(set(aux))]
         if filter_samples:
@@ -1431,6 +1437,99 @@ def order_dataframe_control_group(data, group_col, control_group):
 
     return df
 
+###################################
+
+def PRI_calculate_ttest_s0(data, group1, group2, s0=0):
+    from scipy.stats import ttest_ind_s0
+    tval = None
+    pval = None
+    
+    x = data[group1].values
+    y = data[group2].values
+    
+    tval, pval = ttest_ind_s0(x, y, equal_var=True, s0=s0)
+    
+    return tval, pval
+
+def PRI_permutation_FDR_correction(df, group1, group2, sample_column='sample', group_column='group', s0=0, permutations=250, seed_list=None):
+    import math
+    from sklearn.utils import shuffle
+#     tvals = pd.DataFrame(index=df.columns)
+    pvals = pd.DataFrame(index=df.columns)
+
+    groups_dict = df.set_index(sample_column)[group_column].to_dict()
+    data = df.set_index(sample_column).drop(group_column, 1) 
+
+    act_perm = permutations
+    max_perm = math.factorial(len(set(data.index)))
+    if permutations > max_perm:
+        act_perm = max_perm
+
+    seeds = []
+    seen = [tuple(data.index)]
+    i = 0
+    first = True
+    while i <= act_perm:
+        if first:
+            data[group_column] = data.index.map(groups_dict)
+
+            #Get original T-stats from here (with s0)
+            observed = data.set_index(group_column).apply(func=PRI_calculate_ttest_s0, axis=0, args=(group1, group2, s0)).T
+            observed = pd.DataFrame(observed)
+            observed['t'], observed['p'] = zip(*observed[0])
+            observed.drop(0, 1, inplace=True)
+
+            first = False
+            i += 1
+        else:
+            if seed_list:
+                seed = seed_list[i-1]
+            else:
+                seed = np.random.randint(0, 1000)
+            index = shuffle(data.index, random_state=seed).tolist()    
+            seeds.append(seed)
+            seen.append(tuple(index))
+
+            data.index = index
+            data[group_column] = data.index.map(groups_dict)
+
+            if len(set(data[group_column])) == 2:
+                res = data.set_index(group_column).apply(func=PRI_calculate_ttest_s0, axis=0, args=(group1, group2, s0)).T
+            elif len(set(data[group_column])) > 2:
+                pass
+
+            res = pd.DataFrame(res)
+            res['t'], res['p'] = zip(*res[0])
+#                 res.drop(0, 1, inplace=True)
+#                 tvals[i] = res[['t']]
+            pvals[i] = res[['p']]
+            i += 1
+        
+    pvals = observed[['p']].join(pvals)
+        
+    return observed, pvals, act_perm, seeds
+
+def PRI_calculate_permutation_based_qvalues(observed_original, permutation_pval_df, pval_column='p'):
+    observed_s0 = permutation_pval_df[['p']]
+    permutations = permutation_pval_df.drop('p', axis=1).T
+    
+    qvals = {}
+    for i in observed_original.index:
+        protein = i
+        
+        pval = observed_s0.loc[protein]['p']
+        n_random = permutations.apply(lambda x: x[x<=pval].shape[0]).sum()
+        n_obser = len(set(observed_original[observed_original[pval_column]<=pval].index))
+        q_p = (n_random/n_obser)/permutations.shape[0]
+        qvals[protein] = q_p        
+    
+    qvals_df = pd.Series(qvals, name='qvalue').to_frame()
+    
+    return qvals_df
+
+
+###################################
+
 
 def calculate_ttest_samr(df, labels, n=2, s0=0, paired=False):
     """
@@ -1481,7 +1580,7 @@ def calculate_ttest_samr(df, labels, n=2, s0=0, paired=False):
     return result
 
 
-def calculate_ttest(df, condition1, condition2, paired=False, is_logged=True, non_par=False, tail='two-sided',  correction=False, r=0.707):
+def calculate_ttest(df, condition1, condition2, paired=False, is_logged=True, non_par=False, correction='auto', tail='two-sided', r=0.707):
     """
     Calculates the t-test for the means of independent samples belonging to two different groups. For more information visit https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ttest_ind.html.
 
@@ -1513,7 +1612,7 @@ def calculate_ttest(df, condition1, condition2, paired=False, is_logged=True, no
     test = 't-Test'
     if not non_par:
         correction = False
-        result = pg.ttest(group1, group2, paired, tail, correction, r)
+        result = pg.ttest(group1, group2, paired, tail, 'auto', r)
     else:
         test = 'Mann Whitney'
         result = pg.mwu(group1, group2, tail=tail)
@@ -1738,7 +1837,7 @@ def check_is_paired(df, subject, group):
     return is_pair
 
 
-def run_anova(df, bait=[], alpha=0.05, drop_cols=["sample",'subject'], subject='subject', group='group', control_group=None, permutations=0, correction='fdr_bh', is_logged=True, non_par=False):
+def run_anova(df, bait=[], alpha=0.05, drop_cols=["sample",'subject'], subject='subject', group='group', control_group=None, permutations=0, correction='fdr_bh', is_logged=True, non_par=False, sample_size_correction='auto'):
     """
     Performs statistical test for each protein in a dataset.
     Checks what type of data is the input (paired, unpaired or repeated measurements) and performs posthoc tests for multiclass data.
@@ -1765,13 +1864,13 @@ def run_anova(df, bait=[], alpha=0.05, drop_cols=["sample",'subject'], subject='
         groups = df[group].unique()
         drop_cols = [d for d in drop_cols if d != subject]
         if len(groups) == 2:
-            res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=True, correction=correction, permutations=permutations, is_logged=is_logged, non_par=non_par)
+            res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=True, correction=correction, permutations=permutations, is_logged=is_logged, non_par=non_par, sample_size_correction=sample_size_correction)
         elif len(groups) > 2:
             res = run_repeated_measurements_anova(df, alpha=alpha, drop_cols=drop_cols, subject=subject, within=group, permutations=0, is_logged=is_logged)
     elif len(df[group].unique()) == 2:
         groups = df[group].unique()
         drop_cols = [d for d in drop_cols if d != subject]
-        res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=False, correction=correction, permutations=permutations, is_logged=is_logged, non_par=non_par)
+        res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=False, correction=correction, permutations=permutations, is_logged=is_logged, non_par=non_par, sample_size_correction=sample_size_correction)
     elif len(df[group].unique()) > 2:
         df = df.drop(drop_cols, axis=1)
         aov_results = []
@@ -2015,7 +2114,7 @@ def format_anova_table(df, aov_results, pairwise_results, pairwise_cols, group, 
     return res
 
 
-def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=0, is_logged=True, non_par=False):
+def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=0, is_logged=True, non_par=False, sample_size_correction=False):
     """
     Runs t-test (paired/unpaired) for each protein in dataset and performs permutation-based (if permutations>0) or Benjamini/Hochberg (if permutations=0) multiple hypothesis correction.
 
@@ -2037,7 +2136,7 @@ def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], su
 
         result = run_ttest(df, condition1='group1', condition2='group2', alpha = 0.05, drop_cols=['sample'], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=50)
     """
-    columns = ['T-statistics', 'pvalue', 'mean_group1', 'mean_group2', 'std(group1)', 'std(group2)', 'log2FC', 'test']
+    columns = ['T-statistics', 'pvalue', 'mean(group1)', 'mean(group2)', 'std(group1)', 'std(group2)', 'log2FC', 'test']
     df = df.set_index(group)
     df = df.drop(drop_cols, axis = 1)
     method = 'Unpaired t-test'
@@ -2050,7 +2149,7 @@ def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], su
     else:
         if subject is not None:
             df = df.drop([subject], axis = 1)
-    
+
     scores = df.T.apply(func = calculate_ttest, axis=1, result_type='expand', args =(condition1, condition2, paired, is_logged, non_par))
     scores.columns = columns
     scores = scores.dropna(how="all")
@@ -2144,7 +2243,7 @@ def calculate_pvalue_from_tstats(tstat, dfn, dfk):
     return pval
 
 
-def samr_pvalue_correction(df, subject='subject', group='group', drop_cols=['subject', 'sample'], alpha=0.05, fc=0, s0='null', permutations=250, dfn_dict={}, dfk_dict={}):
+def samr_pvalue_correction(df, subject='subject', group='group', drop_cols=['subject', 'sample'], alpha=0.05, fc=0, s0='null', permutations=250, all_genes=False, localFDR=True):
 
     R_dataprep_function = R('''result <- function(x, y, genenames) {
                                 set.seed(12345)
@@ -2166,9 +2265,9 @@ def samr_pvalue_correction(df, subject='subject', group='group', drop_cols=['sub
                                     samr.compute.siggenes.table(samr.obj, del, data, delta.table, min.foldchange=min_FC)
                                     }''')
 
-    R_qvalue_function = R('''result <- function(samr_res, delta, data, delta_table, all_genes){
-                                    samr.compute.siggenes.table.mod = function(samr.obj, del, data, delta.table, min.foldchange=0,
-                                                                                all.genes=FALSE, compute.localfdr=FALSE){
+    R_qvalue_function = R('''result <- function(samr_res, delta, data, delta_table, min_FC, all_genes, localFDR){
+                                    samr.compute.siggenes.table.mod = function(samr.obj, del, data, delta.table, min.foldchange=min_FC,
+                                                                                all.genes=all_genes, compute.localfdr=localFDR){
                                         if (is.null(data$geneid))
                                         {
                                             data$geneid = paste("g", 1:nrow(data$x), sep = "")
@@ -2465,8 +2564,105 @@ def samr_pvalue_correction(df, subject='subject', group='group', drop_cols=['sub
                                         return(list(plow = plow, pup = pup))
                                         }
 
+                                    localfdr <- function(samr.obj, min.foldchange, perc = 0.01,
+                                        df = 10) {
+                                        ## estimates compute.localfdr at score 'd', using SAM
+                                        #   object 'samr.obj'
+                                        ## 'd' can be a vector of d scores
+                                        ## returns estimate of symmetric fdr  as a percentage
+                                        # this version uses a 1% symmetric window, and does not
+                                        #   estimate fdr in
+                                        # windows  having fewer than 100 genes
+                                        ## to use: first run samr and then pass the resulting fit
+                                        #   object to
+                                        ## localfdr
+                                        ## NOTE: at most 20 of the perms are used to estimate the
+                                        #   fdr (for speed sake)
+                                        # I try two window shapes: symmetric and an assymetric one
+                                        # currently I use the symmetric window to estimate the
+                                        #   compute.localfdr
+                                        ngenes = length(samr.obj$tt)
+                                        mingenes = 50
+                                        # perc is increased, in order to get at least mingenes in a
+                                        #   window
+                                        perc = max(perc, mingenes/length(samr.obj$tt))
+                                        nperms.to.use = min(20, ncol(samr.obj$ttstar))
+                                        nperms = ncol(samr.obj$ttstar)
+                                        d = seq(sort(samr.obj$tt)[1], sort(samr.obj$tt)[ngenes],
+                                            length = 100)
+                                        ndscore <- length(d)
+                                        dvector <- rep(NA, ndscore)
+                                        ind.foldchange = rep(T, length(samr.obj$tt))
+                                        if (!is.null(samr.obj$foldchange[1]) & min.foldchange > 0) {
+                                            ind.foldchange = (samr.obj$foldchange >= min.foldchange) |
+                                                (samr.obj$foldchange <= min.foldchange)
+                                        }
+                                        fdr.temp = function(temp, dlow, dup, pi0, ind.foldchange) {
+                                            return(sum(pi0 * (temp >= dlow & temp <= dup & ind.foldchange)))
+                                        }
+                                        for (i in 1:ndscore) {
+                                            pi0 <- samr.obj$pi0
+                                            r <- sum(samr.obj$tt < d[i])
+                                            r22 <- round(max(r - length(samr.obj$tt) * perc/2, 1))
+                                            dlow.sym <- sort(samr.obj$tt)[r22]
+                                            #      if(d[i]<0)
+                                            #       {
+                                            #         r2 <- max(r-length(samr.obj$tt)*perc/2, 1)
+                                            # r22= min(r+length(samr.obj$tt)*perc/2,
+                                            #   length(samr.obj$tt))
+                                            #
+                                            #          dlow <- sort(samr.obj$tt)[r2]
+                                            #          dup=sort(samr.obj$tt)[r22]
+                                            #       }
+                                            r22 <- min(r + length(samr.obj$tt) * perc/2, length(samr.obj$tt))
+                                            dup.sym <- sort(samr.obj$tt)[r22]
+                                            #     if(d[i]>0)
+                                            #      {
+                                            # r2 <- min(r+length(samr.obj$tt)*perc/2,
+                                            #   length(samr.obj$tt))
+                                            #        r22 <- max(r-length(samr.obj$tt)*perc/2, 1)
+                                            #        dup <- sort(samr.obj$tt)[r2]
+                                            #        dlow <- sort(samr.obj$tt)[r22]
+                                            #
+                                            #       }
+                                            # o <- samr.obj$tt>=dlow & samr.obj$tt<= dup &
+                                            #   ind.foldchange
+                                            oo <- samr.obj$tt >= dlow.sym & samr.obj$tt <= dup.sym &
+                                                ind.foldchange
+                                            nsim <- ncol(samr.obj$ttstar)
+                                            fdr <- rep(NA, nsim)
+                                            fdr2 <- fdr
+                                            if (!is.null(samr.obj$foldchange[1]) & min.foldchange >
+                                                0) {
+                                                temp = as.vector(samr.obj$foldchange.star[, 1:nperms.to.use])
+                                                ind.foldchange = (temp >= min.foldchange) | (temp <=
+                                                    min.foldchange)
+                                            }
+                                            temp = samr.obj$ttstar0[, sample(1:nperms, size = nperms.to.use)]
+                                            # fdr <-median(apply(temp,2,fdr.temp,dlow, dup, pi0,
+                                            #   ind.foldchange))
+                                            fdr.sym <- median(apply(temp, 2, fdr.temp, dlow.sym,
+                                                dup.sym, pi0, ind.foldchange))
+                                            #      fdr <- 100*fdr/sum(o)
+                                            fdr.sym <- 100 * fdr.sym/sum(oo)
+                                            dlow.sym <- dlow.sym
+                                            dup.sym <- dup.sym
+                                            dvector[i] <- fdr.sym
+                                        }
+                                        om = !is.na(dvector) & (dvector != Inf)
+                                        aa = smooth.spline(d[om], dvector[om], df = df)
+                                        return(list(smooth.object = aa, perc = perc, df = df))
+                                    }
+
+                                    predictlocalfdr = function(smooth.object, d) {
+                                        yhat = predict(smooth.object, d)$y
+                                        yhat = pmin(yhat, 100)
+                                        yhat = pmax(yhat, 0)
+                                        return(yhat)
+                                    }
+
                                     set.seed(12345)
-                                    samr.compute.siggenes.table.mod(samr_res, delta, data, delta_table, all.genes=TRUE)
+                                    samr.compute.siggenes.table.mod(samr_res, delta, data, delta_table, all.genes=all_genes, compute.localfdr=localFDR)
                                         }
                                     ''')
 
@@ -2479,6 +2675,16 @@ def samr_pvalue_correction(df, subject='subject', group='group', drop_cols=['sub
     if s0 is None or s0 == "null":
         s0 = ro.r("NULL")
 
+    if all_genes == False:
+        all_genes = ro.r("FALSE")
+    elif all_genes == True:
+        all_genes = ro.r("TRUE")
+
+    if localFDR == False:
+        localFDR = ro.r("FALSE")
+    elif localFDR == True:
+        localFDR = ro.r("TRUE")
+
     samr_res = R_samr_function(data=data, res_type=method, s0=s0, nperms=permutations)
     nperms_run = samr_res.rx2('nperms.act')[0]
     s0_used = samr_res.rx2('s0')[0]
@@ -2489,8 +2695,11 @@ def samr_pvalue_correction(df, subject='subject', group='group', drop_cols=['sub
     delta_table = samr.samr_compute_delta_table(samr_res, fc, nvals=200)
     delta_table = pd.DataFrame(delta_table, columns=["delta", "# med false pos", "90th perc false pos", "# called", "median FDR", "90th perc FDR", "cutlo", "cuthi"])
     delta = delta_table[delta_table['median FDR']<alpha]['delta'].min()
-    siggenes = R_qvalue_function(samr_res, delta, data, delta_table)
-    # siggenes =  samr.samr_compute_siggenes_table(samr_res, del=delta, data, delta_table)
+
+    siggenes = R_qvalue_function(samr_res, delta, data, delta_table, fc, all_genes, localFDR)
+    # siggenes =  samr.samr_compute_siggenes_table(samr_res, delta, data, delta_table, fc, ro.r("FALSE"), ro.r("FALSE"))
+    # print(siggenes.rx2('genes.up'))#[['q-value(%)', 'localfdr(%)']])#.to_csv('siggenes_P45R510.tsv', sep='\t')
+
 
     up_dict = {}
     down_dict = {}
@@ -2531,7 +2740,7 @@ def samr_pvalue_correction(df, subject='subject', group='group', drop_cols=['sub
 
     return s0_used, nperms_run, samr_df
 
-def run_samr(df, bait=[], subject='subject', group='group', drop_cols=['subject', 'sample'], control_group=None, alpha=0.05, s0='null', permutations=250, fc=0, is_logged=True, localfdr=False):
+def run_samr(df, bait=[], subject='subject', group='group', drop_cols=['subject', 'sample'], control_group=None, alpha=0.05, s0='null', permutations=250, fc=0, samr_method='R', seed_list=[], all_genes=False, localFDR=False, is_logged=True, non_par=False, sample_size_correction=False):
     """
     Python adaptation of the 'samr' R package for statistical tests with permutation-based correction and s0 parameter.
     For more information visit https://cran.r-project.org/web/packages/samr/samr.pdf.
@@ -2552,70 +2761,161 @@ def run_samr(df, bait=[], subject='subject', group='group', drop_cols=['subject'
         result = run_samr(df, subject='subject', group='group', drop_cols=['subject', 'sample'], alpha=0.05, s0=1, permutations=250, fc=0)
     """
     np.random.seed(1145536)
+    seeds_used = []
     if control_group is not None:
         df = order_dataframe_control_group(df, group, control_group)
 
     if permutations > 0 and r_installation:
         method, labels = define_samr_method(df, subject, group, drop_cols)
-        aov_results =[]
-        pairwise_results = []
-        for col in df.columns.drop(drop_cols+[group]).tolist():
-            aov = calculate_anova(df.drop(drop_cols, axis=1)[[group, col]], column=col, group=group)
-            aov_results.append(aov)
-            pairwise_result = calculate_pairwise_ttest(df.drop(drop_cols, axis=1)[[group, col]], column=col, subject=subject, group=group, is_logged=is_logged)
-            pairwise_cols = pairwise_result.columns
-            pairwise_results.extend(pairwise_result.values.tolist())
+        print(method)
+        print(labels) 
+        groups = df[group].unique()
 
-        pairwise_results = pd.DataFrame(pairwise_results, columns=pairwise_cols)
-        dof_dict_posthoc = collections.defaultdict(lambda: collections.defaultdict(int))
-        for comparison, identifier, degree in zip(list(zip(pairwise_results['group1'], pairwise_results['group2'])), pairwise_results['identifier'].values.tolist(), pairwise_results['posthoc dof'].values.tolist()):
-            dof_dict_posthoc[comparison][identifier] = degree
+        if check_is_paired(df, subject, group):
+            paired = True
+        else:
+            paired = False
 
-        columns = ['identifier', 'dfk', 'dfn', 'F-statistics', 'pvalue']
-        scores = pd.DataFrame(aov_results, columns = columns)
-        scores = scores.set_index('identifier').drop('F-statistics', 1)
-        dfk_dict = scores['dfk'].to_dict()
-        dfn_dict = scores['dfn'].to_dict()
+        if len(groups) == 2:
+            drop_cols_ = [d for d in drop_cols if d != subject]
+            columns = ['T-statistics', 'pvalue', 'mean(group1)', 'mean(group2)', 'std(group1)', 'std(group2)', 'log2FC', 'test']
+            # method = 'Unpaired t-test'
+            
+            if non_par:
+                method = 'Unpaired t-Test and Mann-Whitney U test'
 
-        #Multiclass pvalue correction
-        s0_used, nperms_run, qvalues_df = samr_pvalue_correction(df, subject, group, drop_cols, alpha, fc, s0, permutations, dfn_dict, dfk_dict)
-        # qvalues_dict = pd.DataFrame(qvalues, columns=['padj', 'rejected', 'F-statistics', 'identifier'])
-        result = scores.join(qvalues_df)
-        # result['F-statistics'] = result.index.map(qvalues_dict.get)
-        # qvalues = qvalues.drop('F-statistics', axis=1)
-        # result = scores.join(qvalues.set_index('identifier'))
+            if paired:
+                df_ = df.set_index([group, subject]).drop(drop_cols_, axis = 1)
+                # method = 'Paired t-test'
+            else:
+                df_ = df.set_index([group]).drop(drop_cols_, axis = 1)
+                if subject is not None:
+                    df_ = df_.drop([subject], axis = 1)
 
-        if not pairwise_results.empty:
-            #Pairwise t-test pvalue correction
-            pairwise_qvalues = []
-            for combination in itertools.combinations(df[group].unique(), 2):
-                d = df[df[group].isin(list(combination))]
-                s0_run, perms, pw_qvalues_df = samr_pvalue_correction(d, subject, group, drop_cols, alpha, fc, s0, permutations, dof_dict_posthoc[combination])
-                # qvals = pd.DataFrame(qvals, columns=['posthoc padj', 'rejected', 'posthoc T-statistics', 'identifier'])
-                pw_qvalues_df = pw_qvalues_df.rename(columns={'F-statistics':'posthoc T-statistics', 'padj':'posthoc padj'})
-                pw_qvalues_df['group1'] = list(combination)[0]
-                pw_qvalues_df['group2'] = list(combination)[1]
-                pw_qvalues_df['posthoc s0'] = s0_run
-                pw_qvalues_df['posthoc correction'] = 'permutation FDR ({} perm)'.format(perms)
-                pairwise_qvalues.append(pw_qvalues_df)
+            scores = df_.T.apply(func = calculate_ttest, axis=1, result_type='expand', args =(groups[0], groups[1], paired, is_logged, non_par))
+            scores.columns = columns
+            scores.index.name = 'identifier'
+            scores = scores.dropna(how="all")
+            scores['group1'] = groups[0]
+            scores['group2'] = groups[1]
 
-            pairwise_qvalues = pd.concat(pairwise_qvalues)
-            pairwise_qvalues = pairwise_qvalues.reset_index()
-            pairwise_results = pairwise_results.drop(['posthoc T-Statistics'], axis=1).reset_index()
-            pairwise_results = pairwise_results.set_index(['group1', 'group2', 'identifier']).join(pairwise_qvalues.set_index(['group1', 'group2', 'identifier'])).reset_index()
-            result = pairwise_results.set_index('identifier').join(result)
-            if 'index' in result:
-                result = result.drop('index', 1)
-            result = result[['group1', 'group2', 'mean(group1)', 'std(group1)', 'mean(group2)', 'std(group2)','posthoc Paired',
-                             'posthoc Parametric', 'posthoc dof', 'posthoc tail', 'posthoc BF10', 'posthoc effsize', 'efftype',
-                             'posthoc T-statistics', 'posthoc pvalue', 'posthoc padj', 'posthoc s0', 'posthoc correction',
-                             'dfk', 'dfn', 'log2FC', 'FC', 'F-statistics', 'pvalue', 'padj']]
+            # T-test pvalues correction
+            if samr_method == 'python':
+                s0_used = s0
+                observ_s0, s0_pvals, nperms_run, seeds_used = PRI_permutation_FDR_correction(df, groups[0], groups[1], sample_column='sample', group_column=group, s0=s0, permutations=permutations, seed_list=seed_list)
+                perm_qvals = PRI_calculate_permutation_based_qvalues(scores[['pvalue']], s0_pvals, pval_column='pvalue')
+                result = scores
+                result['T-statistics'] = result.index.map(observ_s0['t'].to_dict())
+                result['padj'] = result.index.map(perm_qvals['qvalue'].to_dict())
+            elif samr_method == 'R':
+                s0_used, nperms_run, qvalues_df = samr_pvalue_correction(df, subject, group, drop_cols, alpha, fc, s0, permutations, all_genes, localFDR)
+                result = scores.join(qvalues_df)
+                result = result.drop('T-statistics', 1).rename(columns={'F-statistics':'T-statistics'})
 
-            if method != 'Multiclass':
-                result = result.drop(['posthoc Paired', 'posthoc Parametric', 'posthoc T-statistics',
-                                    'posthoc dof', 'posthoc tail', 'posthoc pvalue', 'posthoc BF10',
-                                    'posthoc padj', 'posthoc s0', 'posthoc correction'], axis=1)
-                result = result.rename(columns={'F-statistics': 'T-statistics', 'posthoc effsize': 'effsize'})
+        elif len(groups) > 2:
+            if paired:
+                # result = run_repeated_measurements_anova(df, alpha=alpha, drop_cols=drop_cols, subject=subject, within=group, permutations=0, is_logged=is_logged)
+                result = pd.DataFrame()
+                print("Statistical method not currently supported.")
+                return (bait, result)
+
+            else:
+                aov_results =[]
+                pairwise_results = []
+                for col in df.columns.drop(drop_cols+[group]).tolist():
+                    aov = calculate_anova(df.drop(drop_cols, axis=1)[[group, col]], column=col, group=group)
+                    aov_results.append(aov)
+                    pairwise_result = calculate_pairwise_ttest(df.drop(drop_cols, axis=1)[[group, col]], column=col, subject=subject, group=group, is_logged=is_logged)
+                    pairwise_cols = pairwise_result.columns
+                    pairwise_results.extend(pairwise_result.values.tolist())
+
+                pairwise_results = pd.DataFrame(pairwise_results, columns=pairwise_cols)
+                # dof_dict_posthoc = collections.defaultdict(lambda: collections.defaultdict(int))
+                # for comparison, identifier, degree in zip(list(zip(pairwise_results['group1'], pairwise_results['group2'])), pairwise_results['identifier'].values.tolist(), pairwise_results['posthoc dof'].values.tolist()):
+                #     dof_dict_posthoc[comparison][identifier] = degree
+
+                columns = ['identifier', 'dfk', 'dfn', 'F-statistics', 'pvalue']
+                scores = pd.DataFrame(aov_results, columns = columns)
+                scores = scores.set_index('identifier').drop('F-statistics', 1)
+                # dfk_dict = scores['dfk'].to_dict()
+                # dfn_dict = scores['dfn'].to_dict()
+
+                #Multiclass pvalue correction
+                # s0_used, nperms_run, qvalues_df = samr_pvalue_correction(df, subject, group, drop_cols, alpha, fc, s0, permutations, all_genes, localFDR)#, dfn_dict, dfk_dict)
+                # # qvalues_dict = pd.DataFrame(qvalues, columns=['padj', 'rejected', 'F-statistics', 'identifier'])
+                # result = scores.join(qvalues_df)
+                # # result['F-statistics'] = result.index.map(qvalues_dict.get)
+                # # qvalues = qvalues.drop('F-statistics', axis=1)
+                # # result = scores.join(qvalues.set_index('identifier'))
+
+                if samr_method == 'python':
+                    s0_used = s0
+                    observ_s0, s0_pvals, nperms_run, seeds_used = PRI_permutation_FDR_correction(df, groups[0], groups[1], sample_column='sample', group_column=group, s0=s0, permutations=permutations, seed_list=seed_list)
+                    perm_qvals = PRI_calculate_permutation_based_qvalues(scores[['pvalue']], s0_pvals, pval_column='pvalue')
+                    result = scores
+                    result['F-statistics'] = result.index.map(observ_s0['t'].to_dict())
+                    result['padj'] = result.index.map(perm_qvals['qvalue'].to_dict())
+                elif samr_method == 'R':
+                    s0_used, nperms_run, qvalues_df = samr_pvalue_correction(df, subject, group, drop_cols, alpha, fc, s0, permutations, all_genes, localFDR)
+                    result = scores.join(qvalues_df)
+
+                if not pairwise_results.empty:
+                    #Pairwise t-test pvalue correction
+                    pairwise_qvalues = []
+                    for combination in itertools.combinations(df[group].unique(), 2):
+                        d = df[df[group].isin(list(combination))]
+                        # s0_run, perms, pw_qvalues_df = samr_pvalue_correction(d, subject, group, drop_cols, alpha, fc, s0, permutations, all_genes, localFDR)#, dof_dict_posthoc[combination])
+                        # # qvals = pd.DataFrame(qvals, columns=['posthoc padj', 'rejected', 'posthoc T-statistics', 'identifier'])
+                        # pw_qvalues_df = pw_qvalues_df.rename(columns={'F-statistics':'posthoc T-statistics', 'padj':'posthoc padj'})
+                        # pw_qvalues_df['group1'] = list(combination)[0]
+                        # pw_qvalues_df['group2'] = list(combination)[1]
+                        # pw_qvalues_df['posthoc s0'] = s0_run
+                        # pw_qvalues_df['posthoc correction'] = 'permutation FDR ({} perm)'.format(perms)
+                        # pairwise_qvalues.append(pw_qvalues_df)
+
+                        #########
+                        if samr_method == 'python':
+                            s0_run = s0
+                            observ_s0, s0_pvals, perms, seeds_used = PRI_permutation_FDR_correction(df, groups[0], groups[1], sample_column='sample', group_column=group, s0=s0, permutations=permutations, seed_list=seeds_used)
+                            perm_qvals = PRI_calculate_permutation_based_qvalues(scores[['pvalue']], s0_pvals, pval_column='pvalue')
+                            pw_qvalues_df = observ_s0.rename(columns={'t':'posthoc T-statistics'})
+                            pw_qvalues_df['posthoc padj'] = pw_qvalues_df.index.map(perm_qvals['qvalue'].to_dict())
+                        elif samr_method == 'R':
+                            s0_run, perms, pw_qvalues_df = samr_pvalue_correction(d, subject, group, drop_cols, alpha, fc, s0, permutations, all_genes, localFDR)#, dof_dict_posthoc[combination])
+                            # qvals = pd.DataFrame(qvals, columns=['posthoc padj', 'rejected', 'posthoc T-statistics', 'identifier'])
+                            pw_qvalues_df = pw_qvalues_df.rename(columns={'F-statistics':'posthoc T-statistics', 'padj':'posthoc padj'})
+                        
+                        pw_qvalues_df['group1'] = list(combination)[0]
+                        pw_qvalues_df['group2'] = list(combination)[1]
+                        pw_qvalues_df['posthoc s0'] = s0_run
+                        pw_qvalues_df['posthoc correction'] = 'permutation FDR ({} perm)'.format(perms)
+                        pairwise_qvalues.append(pw_qvalues_df)
+
+                    pairwise_qvalues = pd.concat(pairwise_qvalues)
+                    pairwise_qvalues = pairwise_qvalues.reset_index()
+                    pairwise_results = pairwise_results.drop(['posthoc T-Statistics'], axis=1).reset_index()
+                    pairwise_results = pairwise_results.set_index(['group1', 'group2', 'identifier']).join(pairwise_qvalues.set_index(['group1', 'group2', 'identifier'])).reset_index()
+                    result = pairwise_results.set_index('identifier').join(result)
+                    if 'index' in result:
+                        result = result.drop('index', 1)
+                    result = result[['group1', 'group2', 'mean(group1)', 'std(group1)', 'mean(group2)', 'std(group2)','posthoc Paired',
+                                    'posthoc Parametric', 'posthoc dof', 'posthoc tail', 'posthoc BF10', 'posthoc effsize', 'efftype',
+                                    'posthoc T-statistics', 'posthoc pvalue', 'posthoc padj', 'posthoc s0', 'posthoc correction',
+                                    'dfk', 'dfn', 'log2FC', 'FC', 'F-statistics', 'pvalue', 'padj']]
+
+                    # if method != 'Multiclass':
+                    #     result = result.drop(['posthoc Paired', 'posthoc Parametric', 'posthoc T-statistics',
+                    #                         'posthoc dof', 'posthoc tail', 'posthoc pvalue', 'posthoc BF10',
+                    #                         'posthoc padj', 'posthoc s0', 'posthoc correction'], axis=1)
+                    #     result = result.rename(columns={'F-statistics': 'T-statistics', 'posthoc effsize': 'effsize'})
+
+        if is_logged and 'log2FC' in result.columns:
+            result['FC'] = result['log2FC'].apply(lambda x: np.power(2,x))
+        elif is_logged:
+            result['log2FC'] = result['mean(group1)'] - result['mean(group2)']
+            result['FC'] = result['log2FC'].apply(lambda x: np.power(2,x))
+        else:
+            result['FC'] = result['mean(group1)']/result['mean(group2)']
 
         if 'posthoc pvalue' in result.columns:
             result['-log10 pvalue'] = [- np.log10(x) for x in result['posthoc pvalue'].values]
@@ -2631,15 +2931,15 @@ def run_samr(df, bait=[], subject='subject', group='group', drop_cols=['subject'
         #     result['correction'] = 'permutation FDR ({} perm)'.format(nperms_run)
 
         contrasts = ['diff_mean_group{}'.format(str(i+1)) for i in np.arange(len(set(labels)))]
-        result['correction'] = 'permutation FDR ({} perm)'.format(nperms_run)
         result['rejected'] = result['padj'] < alpha
+        result['correction'] = 'permutation FDR ({} perm)'.format(nperms_run)
         result['Method'] = 'SAMR {}'.format(method)
         result['s0'] = s0_used
         result = result.reset_index()
     else:
         result = run_anova(df, alpha=alpha, drop_cols=drop_cols, subject=subject, group=group, permutations=permutations)
 
-    return (bait, result)
+    return (bait, result, seeds_used)
 
 
 # def run_samr(df, subject='subject', group='group', drop_cols=['subject', 'sample'], alpha=0.05, s0='null', permutations=250, fc=0, is_logged=True, localfdr=False):
@@ -2833,7 +3133,7 @@ def run_site_regulation_enrichment(regulation_data, annotation, identifier='iden
 
     return result
 
-def run_up_down_regulation_enrichment(regulation_data, annotation, interactors=None, identifier='identifier', groups=['group1', 'group2'], annotation_col='annotation', reject_col='rejected', group_col='group', method='fisher', correction='fdr_bh', alpha=0.05, lfc_cutoff=1):
+def run_up_down_regulation_enrichment(regulation_data, annotation, background_list, interactors=None, identifier='identifier', groups=['group1', 'group2'], annotation_col='annotation', reject_col='rejected', group_col='group', method='fisher', correction='fdr_bh', alpha=0.05, lfc_cutoff=1):
     """
     This function runs a simple enrichment analysis for significantly regulated proteins distinguishing between up- and down-regulated.
 
@@ -2859,6 +3159,7 @@ def run_up_down_regulation_enrichment(regulation_data, annotation, interactors=N
     if 'posthoc padj' in regulation_data:
         padj_col = 'posthoc padj'
     for g1, g2 in regulation_data.groupby(groups).groups:
+        print('Comparison: {}~{}'.format(g1, g2))
         df = regulation_data.groupby(groups).get_group((g1,g2))
         if interactors:
             df['up_pairwise_regulation'] = (df[padj_col] < alpha) & (df['log2FC'] >= lfc_cutoff) & (df['identifier'].isin(interactors))
@@ -2867,16 +3168,16 @@ def run_up_down_regulation_enrichment(regulation_data, annotation, interactors=N
             df['up_pairwise_regulation'] = (df[padj_col] < alpha) & (df['log2FC'] >= lfc_cutoff)
             df['down_pairwise_regulation'] = (df[padj_col] < alpha) & (df['log2FC'] <= -lfc_cutoff)
 
-        enrichment = run_regulation_enrichment(df, annotation, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='up_pairwise_regulation', group_col=group_col, method=method, correction=correction)
+        enrichment = run_regulation_enrichment(df, annotation, background_list, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='up_pairwise_regulation', group_col=group_col, method=method, correction=correction)
         enrichment['direction'] = 'upregulated'
         enrichment_results[g1+'~'+g2] = enrichment
-        enrichment = run_regulation_enrichment(df, annotation, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='down_pairwise_regulation', group_col=group_col, method=method, correction=correction)
+        enrichment = run_regulation_enrichment(df, annotation, background_list, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='down_pairwise_regulation', group_col=group_col, method=method, correction=correction)
         enrichment['direction'] = 'downregulated'
         enrichment_results[g1+'~'+g2] = enrichment_results[g1+'~'+g2].append(enrichment)
 
     return enrichment_results
 
-def run_regulation_enrichment(regulation_data, annotation, identifier='identifier', groups=['group1', 'group2'], annotation_col='annotation', reject_col='rejected', group_col='group', method='fisher', correction='fdr_bh'):
+def run_regulation_enrichment(regulation_data, annotation, background_list, identifier='identifier', groups=['group1', 'group2'], annotation_col='annotation', reject_col='rejected', group_col='group', method='fisher', correction='fdr_bh'):
     """
     This function runs a simple enrichment analysis for significantly regulated features in a dataset.
 
@@ -2896,10 +3197,13 @@ def run_regulation_enrichment(regulation_data, annotation, identifier='identifie
         result = run_regulation_enrichment(regulation_data, annotation, identifier='identifier', groups=['group1', 'group2'], annotation_col='annotation', reject_col='rejected', group_col='group', method='fisher')
     """
     result = {}
-    foreground_list = regulation_data[regulation_data[reject_col]][identifier].unique().tolist()
-    background_list = regulation_data[~regulation_data[reject_col]][identifier].unique().tolist()
+    foreground_list = set(regulation_data[regulation_data[reject_col]][identifier])
+    background_list = background_list - foreground_list
+#     background_list = regulation_data[~regulation_data[reject_col]][identifier].unique().tolist()
     foreground_pop = len(foreground_list)
-    background_pop = len(regulation_data[identifier].unique().tolist())
+# #     background_pop = len(regulation_data[identifier].unique().tolist())
+    background_pop = len(background_list)
+    
     grouping = []
     for i in annotation[identifier]:
         if i in foreground_list:
@@ -2916,7 +3220,7 @@ def run_regulation_enrichment(regulation_data, annotation, identifier='identifie
     return result
 
 
-def run_enrichment(data, foreground_id, background_id, foreground_pop, background_pop, annotation_col='annotation', group_col='group', identifier_col='identifier', method='fisher', correction='fdr_bh'):
+def run_enrichment(data, foreground_id, background_id, foreground_pop, background_pop, annotation_col='annotation', group_col='group', identifier_col='identifier', method='fisher', alpha=0.05, correction='fdr_bh'):
     """
     Computes enrichment of the foreground relative to a given backgroung, using Fisher's exact test, and corrects for multiple hypothesis testing.
 
@@ -2953,8 +3257,8 @@ def run_enrichment(data, foreground_id, background_id, foreground_pop, backgroun
             num_background = num_background[0]
         else:
             num_background=0
-        if method == 'fisher' and num_foreground > 1:  # and num_foreground > 1:
-            odds, pvalue = run_fisher([num_foreground, foreground_pop-num_foreground],[num_background, background_pop-foreground_pop-num_background])
+        if method == 'fisher' and num_foreground > 1:
+            odds, pvalue = run_fisher([num_foreground, foreground_pop-num_foreground],[num_background, background_pop-num_background])
             fnum.append(num_foreground)
             bnum.append(num_background)
             terms.append(annotation)
