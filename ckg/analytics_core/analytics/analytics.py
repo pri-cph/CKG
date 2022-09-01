@@ -5,7 +5,9 @@ import time
 import pandas as pd
 import collections
 import re
+import random
 import itertools
+import multiprocessing as mp
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.cluster import AffinityPropagation
@@ -1226,6 +1228,129 @@ def get_counts_permutation_fdr(value, random, observed, n, alpha):
     return (qvalue, qvalue <= alpha)
 
 
+def divide_chunks(l, n):
+    for i in range(0, len(l), n):
+        yield l[i:i + n]
+
+
+def calculate_ttest_s0(data, group1, group2, s0=0, paired=False, alternative='two-sided'):
+    from scipy.stats import ttest_1samp, ttest_ind_s0#, ttest_rel_s0
+    np.random.seed(12345678)
+    tval = None
+    pval = None
+    
+    x = data[group1].values
+    y = data[group2].values
+    nx, ny = x.size, y.size
+    
+    if ny == 1:
+        tval, pval = ttest_1samp(x, y, alternative=alternative)
+    if nx > 1 or ny > 1:
+        if paired:
+            if np.array_equal(x, y):
+                warnings.warn("x and y are equals. Cannot compute T or p-value.")
+                tval, pval = np.nan, np.nan
+            else:
+                tval, pval = ttest_rel_s0(x, y, s0=s0, alternative=alternative)
+        else:
+            tval, pval = ttest_ind_s0(x, y, equal_var=True, s0=s0)#, alternative=alternative)
+    return tval, pval
+
+
+def get_permutations_pvalues(permuted_label, data, g1, g2, group_dict, s0):
+    #### data: columns proteins, rows samples; index is "sample"; no "group" column
+
+    data.index = permuted_label
+    data['group'] = data.index.map(group_dict)
+
+    if len(set(data['group'])) == 2:
+        res = data.set_index('group').apply(func=calculate_ttest_s0, axis=0, args=(g1, g2, s0)).T
+    elif len(set(data['group'])) > 2:
+        pass
+
+    res = pd.DataFrame(res)
+    res['t'], res['p'] = zip(*res[0])
+    return res['p'].to_dict()
+
+
+def get_qvalue_counts(pvalue, observed_pvals, permutation_pvals, n_permutations):
+    n_random = permutation_pvals[permutation_pvals <= pvalue].shape[0]
+    n_obser = (observed_pvals <= pvalue).sum()
+    qval = n_random/n_obser/n_permutations
+    return qval
+
+
+def run_label_permutations(permute_list, permutations=250, seed_list=None):
+#     data = data[[permute_column]+data.select_dtypes(include=['int', 'float']).columns.tolist()]
+#     data.set_index(permute_column, inplace=True)
+    
+    labels = []
+    i = 0
+    while i < permutations:
+    
+        if seed_list:
+            seed = seed_list[i]
+        else:
+            seed = np.random.randint(0, 1000)
+
+        label = tuple(shuffle(permute_list, random_state=seed).tolist())
+        labels.append(label)
+        i+=1
+    return labels
+
+
+def run_permutation_based_fdr_correction(data, observed_pvalues, group1, group2, identifier_col='identifier', sample_col='sample', group_col='group', fdr=0.05, s0=1, permutations=250):
+    #data: processed_data
+    
+    random.seed(1661854660)
+    n_processors = mp.cpu_count()-2
+    seed_list = random.sample(range(0, permutations*1000), permutations)
+    
+    groups = data.set_index(sample_col)[group_col].to_dict()
+
+    data_batches = data.select_dtypes(include=['int', 'float']).columns
+    qval_batches = data_batches
+    if len(data_batches) > 500:
+        data_batches = list(divide_chunks(data_batches, 600))
+        qval_batches = list(divide_chunks(qval_batches, 60))
+
+    #Get label permutations
+    permutation_labels = run_label_permutations(data[sample_col], permutations=permutations, seed_list=seed_list)
+    perm_batches = [permutation_labels]
+    
+    if permutations > 250:
+        perm_batches = list(divide_chunks(permutation_labels, 250))
+    
+    all_observed_s0 = pd.DataFrame()
+    all_perm_vals = pd.DataFrame()
+    for batch in data_batches:
+        p_data = data.set_index('group')[batch]
+        p_data_ = data.set_index('sample')[batch]
+        
+        ### apply_multi_hypothesis_correction ###
+        #Get original T-stats from here (with s0): remap previous table T-statistics column
+        with mp.Pool(n_processors) as pool:
+            observed_s0 = pool.starmap(calculate_ttest_s0, [(p_data[protein], group1, group2, s0) for protein in p_data.columns])
+        all_observed_s0 = all_observed_s0.append(pd.DataFrame(observed_s0, index=p_data.columns, columns=['T-statistics', 'pvalue']))
+        
+        perm_results = [] 
+        for perms in perm_batches:
+            #Get permuted pvalues (with s0)
+            with mp.Pool(n_processors) as pool:
+                result = pool.starmap(get_permutations_pvalues, [(i, p_data_, group1, group2, groups, s0) for i in perms])
+            perm_results.extend(result)
+        all_perm_vals = all_perm_vals.append(pd.DataFrame(perm_results).T)
+
+    all_qvalues = pd.DataFrame()
+    for q_batch in qval_batches:
+        #Calculate qvalues
+        with mp.Pool(n_processors) as pool:
+            results = pool.starmap(get_qvalue_counts, [(all_observed_s0.loc[protein]['pvalue'], observed_pvalues, all_perm_vals.values, permutations) for protein in q_batch])
+        all_qvalues = all_qvalues.append(pd.DataFrame(results, index=q_batch, columns=['padj']))
+        
+    return all_observed_s0.join(all_qvalues)
+
+
 def convertToEdgeList(data, cols):
     """
     This function converts a pandas dataframe to an edge list where index becomes the source nodes and columns the target nodes.
@@ -2079,12 +2204,13 @@ def format_anova_table(df, aov_results, pairwise_results, pairwise_cols, group, 
     corrected = False
     #FDR correction
     if permutations > 0:
-        max_perm = get_max_permutations(df, group=group)
-        if max_perm>=10:
-            if max_perm < permutations:
-                permutations = max_perm
+        # max_perm = get_max_permutations(df, group=group)
+        # if max_perm>=10:
+        #     if max_perm < permutations:
+        #         permutations = max_perm
             observed_pvalues = scores.pvalue
-            count = apply_pvalue_permutation_fdrcorrection(df, observed_pvalues, group=group, alpha=alpha, permutations=permutations)
+            # count = apply_pvalue_permutation_fdrcorrection(df, observed_pvalues, group=group, alpha=alpha, permutations=permutations)
+            count = run_permutation_based_fdr_correction()
             scores= scores.join(count)
             scores['correction'] = 'permutation FDR ({} perm)'.format(permutations)
             corrected = True
@@ -2114,7 +2240,7 @@ def format_anova_table(df, aov_results, pairwise_results, pairwise_cols, group, 
     return res
 
 
-def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=0, is_logged=True, non_par=False, sample_size_correction=False):
+def run_ttest(data, condition1, condition2, alpha = 0.05, drop_cols=["sample"], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=0, is_logged=True, non_par=False, sample_size_correction=False):
     """
     Runs t-test (paired/unpaired) for each protein in dataset and performs permutation-based (if permutations>0) or Benjamini/Hochberg (if permutations=0) multiple hypothesis correction.
 
@@ -2137,7 +2263,7 @@ def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], su
         result = run_ttest(df, condition1='group1', condition2='group2', alpha = 0.05, drop_cols=['sample'], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=50)
     """
     columns = ['T-statistics', 'pvalue', 'mean(group1)', 'mean(group2)', 'std(group1)', 'std(group2)', 'log2FC', 'test']
-    df = df.set_index(group)
+    df = data.set_index(group)
     df = df.drop(drop_cols, axis = 1)
     method = 'Unpaired t-test'
     if non_par:
@@ -2157,13 +2283,15 @@ def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], su
     corrected = False
     #FDR correction
     if permutations > 0:
-        max_perm = get_max_permutations(df, group=group)
-        if max_perm>=10:
-            if max_perm < permutations:
-                permutations = max_perm
+        # max_perm = get_max_permutations(df, group=group)
+        # if max_perm>=10:
+        #     if max_perm < permutations:
+        #         permutations = max_perm
             observed_pvalues = scores.pvalue
-            count = apply_pvalue_permutation_fdrcorrection(df, observed_pvalues, group=group, alpha=alpha, permutations=permutations)
-            scores= scores.join(count)
+            count = run_permutation_based_fdr_correction(data, observed_pvalues, group1=condition1, group2=condition2, identifier_col='identifier', sample_col='sample', fdr=alpha, s0=1, permutations=250)
+            # count = apply_pvalue_permutation_fdrcorrection(df, observed_pvalues, group=group, alpha=alpha, permutations=permutations)
+            scores['T-statistics'] = scores.index.map(count['T-statistics'].to_dict())
+            scores = scores.join(count['padj'])
             scores['correction'] = 'permutation FDR ({} perm)'.format(permutations)
             corrected = True
 
@@ -2174,8 +2302,8 @@ def run_ttest(df, condition1, condition2, alpha = 0.05, drop_cols=["sample"], su
         scores['rejected'] = rejected
         corrected = True
 
-    scores['group1'] = condition1
-    scores['group2'] = condition2
+    scores.insert(0, 'group1', condition1)
+    scores.insert(0, 'group2', condition2)
     if is_logged:
         scores['FC'] = scores['log2FC'].apply(lambda x: np.power(2,x))
     else:
@@ -2765,7 +2893,7 @@ def run_samr(df, bait=[], subject='subject', group='group', drop_cols=['subject'
     if control_group is not None:
         df = order_dataframe_control_group(df, group, control_group)
 
-    if permutations > 0 and r_installation:
+    if permutations > 0:# and r_installation:
         method, labels = define_samr_method(df, subject, group, drop_cols)
         print(method)
         print(labels) 
