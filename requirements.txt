@@ -1,5 +1,6 @@
 pandas==0.24.2
-Flask==1.0.3
+Flask==2.0.3
+Jinja2==3.1.1
 passlib==1.7.1
 neo4j==4.2.0
 PyYAML==5.1.1
@@ -9,9 +10,10 @@ biopython==1.73
 obonet==0.2.5
 rarfile==3.1
 dash==1.2.0
+Werkzeug==2.0.0
 redis>=3.2.1
 matplotlib>=3.1.1
-scipy==1.4.1
+#scipy==1.4.1
 cyjupyter==0.2.0
 pyvis==0.1.7.0
 tzlocal==1.5.1
@@ -35,6 +37,7 @@ dash_cytoscape>=0.1.1
 networkx==2.5
 chart-studio==1.0.0
 xhtml2pdf==0.2.4
+reportlab==3.6.6
 lxml==4.3.4
 celery==5.0.5
 cffi>=1.14.0
@@ -56,3 +59,4 @@ rst2pdf==0.98
 nbsphinx>=0.8.0
 ipykernel>=5.4.3
 eventlet==0.25.1
+UpSetPlot==0.6.1
