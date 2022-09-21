@@ -1308,11 +1308,11 @@ def run_permutation_based_fdr_correction(data, observed_pvalues, group1, group2,
     
     groups = data.set_index(sample_col)[group_col].to_dict()
 
-    data_batches = data.select_dtypes(include=['int', 'float']).columns
+    data_batches = [data.select_dtypes(include=['int', 'float']).columns]
     qval_batches = data_batches
-    if len(data_batches) > 500:
-        data_batches = list(divide_chunks(data_batches, 600))
-        qval_batches = list(divide_chunks(qval_batches, 60))
+    if len(data_batches[0]) > 500:
+        data_batches = list(divide_chunks(data_batches[0], 600))
+        qval_batches = list(divide_chunks(qval_batches[0], 60))
 
     #Get label permutations
     permutation_labels = run_label_permutations(data[sample_col], permutations=permutations, seed_list=seed_list)
@@ -1348,7 +1348,10 @@ def run_permutation_based_fdr_correction(data, observed_pvalues, group1, group2,
             results = pool.starmap(get_qvalue_counts, [(all_observed_s0.loc[protein]['pvalue'], observed_pvalues, all_perm_vals.values, permutations) for protein in q_batch])
         all_qvalues = all_qvalues.append(pd.DataFrame(results, index=q_batch, columns=['padj']))
         
-    return all_observed_s0.join(all_qvalues)
+    results = all_observed_s0.join(all_qvalues)
+    results['s0'] = str(s0)
+    
+    return results
 
 
 def convertToEdgeList(data, cols):
@@ -1749,7 +1752,7 @@ def calculate_ttest(df, condition1, condition2, paired=False, is_logged=True, no
     if 'p-val' in result.columns:
         pvalue = result['p-val'].values[0]
 
-    return (t, pvalue, mean1, mean2, std1, std2, fc, test)
+    return (mean1, std1, mean2, std2, fc, t, pvalue, test)
 
 
 def calculate_THSD(df, column, group='group', alpha=0.05, is_logged=True):
@@ -1962,7 +1965,7 @@ def check_is_paired(df, subject, group):
     return is_pair
 
 
-def run_anova(df, bait=[], alpha=0.05, drop_cols=["sample",'subject'], subject='subject', group='group', control_group=None, permutations=0, correction='fdr_bh', is_logged=True, non_par=False, sample_size_correction='auto'):
+def run_anova(df, bait=[], alpha=0.05, drop_cols=["sample",'subject'], subject='subject', group='group', control_group=None, s0=0, permutations=0, correction='fdr_bh', is_logged=True, non_par=False, sample_size_correction='auto', multiple_corrections=False):
     """
     Performs statistical test for each protein in a dataset.
     Checks what type of data is the input (paired, unpaired or repeated measurements) and performs posthoc tests for multiclass data.
@@ -1989,13 +1992,13 @@ def run_anova(df, bait=[], alpha=0.05, drop_cols=["sample",'subject'], subject='
         groups = df[group].unique()
         drop_cols = [d for d in drop_cols if d != subject]
         if len(groups) == 2:
-            res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=True, correction=correction, permutations=permutations, is_logged=is_logged, non_par=non_par, sample_size_correction=sample_size_correction)
+            res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=True, correction=correction, s0=s0, permutations=permutations, is_logged=is_logged, non_par=non_par, sample_size_correction=sample_size_correction, multiple_corrections=multiple_corrections)
         elif len(groups) > 2:
             res = run_repeated_measurements_anova(df, alpha=alpha, drop_cols=drop_cols, subject=subject, within=group, permutations=0, is_logged=is_logged)
     elif len(df[group].unique()) == 2:
         groups = df[group].unique()
         drop_cols = [d for d in drop_cols if d != subject]
-        res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=False, correction=correction, permutations=permutations, is_logged=is_logged, non_par=non_par, sample_size_correction=sample_size_correction)
+        res = run_ttest(df, groups[0], groups[1], alpha = alpha, drop_cols=drop_cols, subject=subject, group=group, paired=False, correction=correction, s0=s0, permutations=permutations, is_logged=is_logged, non_par=non_par, sample_size_correction=sample_size_correction, multiple_corrections=multiple_corrections)
     elif len(df[group].unique()) > 2:
         df = df.drop(drop_cols, axis=1)
         aov_results = []
@@ -2240,7 +2243,7 @@ def format_anova_table(df, aov_results, pairwise_results, pairwise_cols, group, 
     return res
 
 
-def run_ttest(data, condition1, condition2, alpha = 0.05, drop_cols=["sample"], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=0, is_logged=True, non_par=False, sample_size_correction=False):
+def run_ttest(data, condition1, condition2, alpha = 0.05, drop_cols=["sample"], subject='subject', group='group', paired=False, correction='fdr_bh', s0=0, permutations=0, is_logged=True, non_par=False, sample_size_correction=False, multiple_corrections=False):
     """
     Runs t-test (paired/unpaired) for each protein in dataset and performs permutation-based (if permutations>0) or Benjamini/Hochberg (if permutations=0) multiple hypothesis correction.
 
@@ -2262,7 +2265,7 @@ def run_ttest(data, condition1, condition2, alpha = 0.05, drop_cols=["sample"], 
 
         result = run_ttest(df, condition1='group1', condition2='group2', alpha = 0.05, drop_cols=['sample'], subject='subject', group='group', paired=False, correction='fdr_bh', permutations=50)
     """
-    columns = ['T-statistics', 'pvalue', 'mean(group1)', 'mean(group2)', 'std(group1)', 'std(group2)', 'log2FC', 'test']
+    columns = ['mean(group1)', 'std(group1)', 'mean(group2)', 'std(group2)', 'log2FC', 'T-statistics', 'pvalue', 'test']
     df = data.set_index(group)
     df = df.drop(drop_cols, axis = 1)
     method = 'Unpaired t-test'
@@ -2281,31 +2284,58 @@ def run_ttest(data, condition1, condition2, alpha = 0.05, drop_cols=["sample"], 
     scores = scores.dropna(how="all")
 
     corrected = False
-    #FDR correction
-    if permutations > 0:
-        # max_perm = get_max_permutations(df, group=group)
-        # if max_perm>=10:
-        #     if max_perm < permutations:
-        #         permutations = max_perm
-            observed_pvalues = scores.pvalue
-            count = run_permutation_based_fdr_correction(data, observed_pvalues, group1=condition1, group2=condition2, identifier_col='identifier', sample_col='sample', fdr=alpha, s0=1, permutations=250)
-            # count = apply_pvalue_permutation_fdrcorrection(df, observed_pvalues, group=group, alpha=alpha, permutations=permutations)
-            scores['T-statistics'] = scores.index.map(count['T-statistics'].to_dict())
-            scores = scores.join(count['padj'])
-            scores['correction'] = 'permutation FDR ({} perm)'.format(permutations)
-            corrected = True
 
-    if not corrected:
-        rejected, padj = apply_pvalue_correction(scores["pvalue"].tolist(), alpha=alpha, method=correction)
-        scores['correction'] = 'FDR correction BH'
-        scores['padj'] = padj
-        scores['rejected'] = rejected
+    if multiple_corrections:
+        #FDR correction
+        if permutations > 0:
+            # max_perm = get_max_permutations(df, group=group)
+            # if max_perm>=10:
+            #     if max_perm < permutations:
+            #         permutations = max_perm
+                observed_pvalues = scores.pvalue
+                count = run_permutation_based_fdr_correction(data, observed_pvalues, group1=condition1, group2=condition2, identifier_col='identifier', sample_col='sample', fdr=alpha, s0=s0, permutations=permutations)
+                # count = apply_pvalue_permutation_fdrcorrection(df, observed_pvalues, group=group, alpha=alpha, permutations=permutations)
+                # scores['T-statistics'] = scores.index.map(count['T-statistics'].to_dict())
+                scores = scores.join(count['padj'])
+                scores = scores.rename(columns={'padj':'padj1'})
+                scores['correction1'] = 'permutation FDR ({} perm)'.format(permutations)
+
+        if correction is not None:
+            rejected, padj = apply_pvalue_correction(scores["pvalue"].tolist(), alpha=alpha, method=correction)
+            if 'padj1' in scores.columns:
+                scores['padj2'] = padj
+                scores['correction2'] = 'FDR correction BH'
+            else:
+                scores['padj'] = padj
+                scores['correction'] = 'FDR correction BH'
+            # scores['rejected'] = rejected
+            
         corrected = True
 
+    if not corrected:
+        if permutations > 0:
+            # max_perm = get_max_permutations(df, group=group)
+            # if max_perm>=10:
+            #     if max_perm < permutations:
+            #         permutations = max_perm
+                observed_pvalues = scores.pvalue
+                count = run_permutation_based_fdr_correction(data, observed_pvalues, group1=condition1, group2=condition2, identifier_col='identifier', sample_col='sample', fdr=alpha, s0=s0, permutations=permutations)
+                # count = apply_pvalue_permutation_fdrcorrection(df, observed_pvalues, group=group, alpha=alpha, permutations=permutations)
+                # scores['T-statistics'] = scores.index.map(count['T-statistics'].to_dict())
+                scores = scores.join(count['padj'])
+                scores['correction'] = 'permutation FDR ({} perm)'.format(permutations)
+                corrected = True
+        else:
+            rejected, padj = apply_pvalue_correction(scores["pvalue"].tolist(), alpha=alpha, method=correction)
+            scores['padj'] = padj
+            scores['correction'] = 'FDR correction BH'
+            # scores['rejected'] = rejected
+
     scores.insert(0, 'group1', condition1)
-    scores.insert(0, 'group2', condition2)
+    scores.insert(1, 'group2', condition2)
     if is_logged:
-        scores['FC'] = scores['log2FC'].apply(lambda x: np.power(2,x))
+        scores.insert(6, 'FC', scores['log2FC'].apply(lambda x: np.power(2,x)))
+        # scores['FC'] = scores['log2FC'].apply(lambda x: np.power(2,x))
     else:
         scores = scores.rename(columns={'log2FC':'FC'})
 
@@ -2906,7 +2936,7 @@ def run_samr(df, bait=[], subject='subject', group='group', drop_cols=['subject'
 
         if len(groups) == 2:
             drop_cols_ = [d for d in drop_cols if d != subject]
-            columns = ['T-statistics', 'pvalue', 'mean(group1)', 'mean(group2)', 'std(group1)', 'std(group2)', 'log2FC', 'test']
+            columns = ['mean(group1)', 'std(group1)', 'mean(group2)', 'std(group2)', 'log2FC', 'T-statistics', 'pvalue', 'test']
             # method = 'Unpaired t-test'
             
             if non_par:
@@ -3296,16 +3326,16 @@ def run_up_down_regulation_enrichment(regulation_data, annotation, background_li
             df['up_pairwise_regulation'] = (df[padj_col] < alpha) & (df['log2FC'] >= lfc_cutoff)
             df['down_pairwise_regulation'] = (df[padj_col] < alpha) & (df['log2FC'] <= -lfc_cutoff)
 
-        enrichment = run_regulation_enrichment(df, annotation, background_list, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='up_pairwise_regulation', group_col=group_col, method=method, correction=correction)
+        enrichment = run_regulation_enrichment(df, annotation, background_list, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='up_pairwise_regulation', group_col=group_col, method=method, correction=correction, alpha=alpha)
         enrichment['direction'] = 'upregulated'
         enrichment_results[g1+'~'+g2] = enrichment
-        enrichment = run_regulation_enrichment(df, annotation, background_list, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='down_pairwise_regulation', group_col=group_col, method=method, correction=correction)
+        enrichment = run_regulation_enrichment(df, annotation, background_list, identifier=identifier, groups=groups, annotation_col=annotation_col, reject_col='down_pairwise_regulation', group_col=group_col, method=method, correction=correction, alpha=alpha)
         enrichment['direction'] = 'downregulated'
         enrichment_results[g1+'~'+g2] = enrichment_results[g1+'~'+g2].append(enrichment)
 
     return enrichment_results
 
-def run_regulation_enrichment(regulation_data, annotation, background_list, identifier='identifier', groups=['group1', 'group2'], annotation_col='annotation', reject_col='rejected', group_col='group', method='fisher', correction='fdr_bh'):
+def run_regulation_enrichment(regulation_data, annotation, background_list, identifier='identifier', groups=['group1', 'group2'], annotation_col='annotation', reject_col='rejected', group_col='group', method='fisher', correction='fdr_bh', alpha=0.05):
     """
     This function runs a simple enrichment analysis for significantly regulated features in a dataset.
 
@@ -3343,7 +3373,7 @@ def run_regulation_enrichment(regulation_data, annotation, background_list, iden
     annotation[group_col] = grouping
     annotation = annotation.dropna(subset=[group_col])
 
-    result = run_enrichment(annotation, foreground_id='foreground', background_id='background', foreground_pop=foreground_pop, background_pop=background_pop, annotation_col=annotation_col, group_col=group_col, identifier_col=identifier, method=method, correction=correction)
+    result = run_enrichment(annotation, foreground_id='foreground', background_id='background', foreground_pop=foreground_pop, background_pop=background_pop, annotation_col=annotation_col, group_col=group_col, identifier_col=identifier, method=method, correction=correction, alpha=alpha)
 
     return result
 
@@ -3393,7 +3423,7 @@ def run_enrichment(data, foreground_id, background_id, foreground_pop, backgroun
             pvalues.append(pvalue)
             ids.append(",".join(df.loc[(df[annotation_col]==annotation) & (df[group_col] == foreground_id), identifier_col].tolist()))
     if len(pvalues) > 1:
-        rejected, padj = apply_pvalue_correction(pvalues, alpha=0.05, method=correction)
+        rejected, padj = apply_pvalue_correction(pvalues, alpha=alpha, method=correction)
         result = pd.DataFrame({'terms':terms, 'identifiers':ids, 'foreground':fnum, 'background':bnum, 'foreground_pop':foreground_pop, 'background_pop':background_pop,'pvalue':pvalues, 'padj':padj, 'rejected':rejected})
         result = result.sort_values(by='padj',ascending=True)
 
