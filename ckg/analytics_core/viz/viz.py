@@ -177,7 +177,7 @@ def get_boxplot_grid(data, identifier, args):
             color_map = args['colors']
         else:
             color_map = {}
-        
+
         if args['axis'] == 'rows':
             fig = px.box(data, x=args["x"], y=args["y"], color=args['color'], color_discrete_map=color_map, points="all", facet_row=args["facet"], width=args['width'])
         else:
@@ -664,7 +664,7 @@ def get_scatterplot(data, identifier, args):
         figure = px.scatter(data, x=x, y=y, color=group, color_discrete_map=args['colors'], hover_data=annotation, size=size, symbol=symbol, trendline=trendline, text=text)
     else:
         figure = px.scatter(data, x=x, y=y, color=group, hover_data=annotation, size=size, symbol=symbol, trendline=trendline, text=text)
-    
+
     figure.update_traces(marker=dict(size=14,
                                      opacity=0.7,
                                      line=dict(width=0.5, color='DarkSlateGrey')),
@@ -1278,7 +1278,7 @@ def get_network(data, identifier, args):
     net = None
     if 'cutoff_abs' not in args:
         args['cutoff_abs'] = False
-        
+
     if 'title' not in args:
         args['title'] = identifier
 
@@ -2426,7 +2426,7 @@ def get_km_plot(data, identifier, args):
                 result = html.Div(id=identifier, children=[figure])
             else:
                 result = plot.figure
-            
+
     return result
 
 def get_cumulative_hazard_plot(data, identifier, args):
@@ -2452,7 +2452,7 @@ def get_cumulative_hazard_plot(data, identifier, args):
             xlabel = 'Time'
             ylabel = 'Nelson Aalen - Cumulative Hazard'
             if 'title' in args:
-                title = args['title'] + "--" 
+                title = args['title'] + "--"
             if 'xlabel' in args:
                 xlabel = args['xlabel']
             if 'ylabel' in args:
@@ -2465,7 +2465,7 @@ def get_cumulative_hazard_plot(data, identifier, args):
                 result = html.Div(id=identifier, children=[figure])
             else:
                 result = plot.figure
-            
+
     return result
 
 

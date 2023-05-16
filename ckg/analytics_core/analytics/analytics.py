@@ -32,7 +32,7 @@ from ckg import ckg_utils
 from ckg.analytics_core import utils
 from ckg.analytics_core.analytics import wgcnaAnalysis as wgcna
 from ckg.analytics_core.analytics import kaplan_meierAnalysis
-import statsmodels.api as sm
+#import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from combat.pycombat import pycombat
 
@@ -1484,40 +1484,40 @@ def calculate_rm_correlation(df, x, y, subject):
     return (x, y, rm, pvalue, dof)
 
 
-def run_rm_correlation(df, alpha=0.05, subject='subject', correction='fdr_bh'):
-    """
-    Computes pairwise repeated measurements correlations for all columns in dataframe, and returns results as an edge list with 'weight' as correlation score, p-values, degrees of freedom and ajusted p-values.
+# def run_rm_correlation(df, alpha=0.05, subject='subject', correction='fdr_bh'):
+#     """
+#     Computes pairwise repeated measurements correlations for all columns in dataframe, and returns results as an edge list with 'weight' as correlation score, p-values, degrees of freedom and ajusted p-values.
 
-    :param df: pandas dataframe with samples as rows and features as columns.
-    :param str subject: name of column containing subject identifiers.
-    :param float alpha: error rate. Values velow alpha are considered significant.
-    :param string correction: type of correction type see apply_pvalue_correction for methods
-    :return: Pandas dataframe with columns: 'node1', 'node2', 'weight', 'pvalue', 'dof', 'padj' and 'rejected'.
+#     :param df: pandas dataframe with samples as rows and features as columns.
+#     :param str subject: name of column containing subject identifiers.
+#     :param float alpha: error rate. Values velow alpha are considered significant.
+#     :param string correction: type of correction type see apply_pvalue_correction for methods
+#     :return: Pandas dataframe with columns: 'node1', 'node2', 'weight', 'pvalue', 'dof', 'padj' and 'rejected'.
 
-    Example::
+#     Example::
 
-        result = run_rm_correlation(df, alpha=0.05, subject='subject', correction='fdr_bh')
-    """
-    rows = []
-    if not df.empty:
-        df = df.set_index(subject)._get_numeric_data().dropna(axis=1)
-        df.columns = df.columns.astype(str)
-        combinations = itertools.combinations(df.columns, 2)
-        df = df.reset_index()
-        for x, y in combinations:
-            row = [x, y]
-            subset = df[[x,y, subject]]
-            row.extend(pg.rm_corr(subset, x, y, subject).values.tolist()[0])
-            rows.append(row)
+#         result = run_rm_correlation(df, alpha=0.05, subject='subject', correction='fdr_bh')
+#     """
+#     rows = []
+#     if not df.empty:
+#         df = df.set_index(subject)._get_numeric_data().dropna(axis=1)
+#         df.columns = df.columns.astype(str)
+#         combinations = itertools.combinations(df.columns, 2)
+#         df = df.reset_index()
+#         for x, y in combinations:
+#             row = [x, y]
+#             subset = df[[x,y, subject]]
+#             row.extend(pg.rm_corr(subset, x, y, subject).values.tolist()[0])
+#             rows.append(row)
 
-        correlation = pd.DataFrame(rows, columns=["node1", "node2", "weight", "dof", "pvalue", "CI95%", "power"])
-        rejected, padj = apply_pvalue_correction(correlation["pvalue"].tolist(), alpha=alpha, method=correction)
-        correlation["padj"] = padj
-        correlation["rejected"] = rejected
-        correlation = correlation[correlation.rejected]
-        correlation["padj"] = correlation["padj"].apply(lambda x: str(round(x, 5)))
+#         correlation = pd.DataFrame(rows, columns=["node1", "node2", "weight", "dof", "pvalue", "CI95%", "power"])
+#         rejected, padj = apply_pvalue_correction(correlation["pvalue"].tolist(), alpha=alpha, method=correction)
+#         correlation["padj"] = padj
+#         correlation["rejected"] = rejected
+#         correlation = correlation[correlation.rejected]
+#         correlation["padj"] = correlation["padj"].apply(lambda x: str(round(x, 5)))
 
-    return correlation
+#     return correlation
 
 
 def run_efficient_correlation(data, method='pearson'):
@@ -3415,7 +3415,7 @@ def run_enrichment(data, foreground_id, background_id, foreground_pop, backgroun
             num_background = num_background[0]
         else:
             num_background=0
-        if method == 'fisher' and num_foreground > 1:
+        if method == 'fisher' and num_foreground > 1 and foreground_pop-num_foreground > 0 and background_pop-num_background > 0:
             odds, pvalue = run_fisher([num_foreground, foreground_pop-num_foreground],[num_background, background_pop-num_background])
             fnum.append(num_foreground)
             bnum.append(num_background)
@@ -3879,45 +3879,45 @@ def omega_squared(aov):
     return aov
 
 
-def run_two_way_anova(df, drop_cols=['sample'], subject='subject', group=['group', 'secondary_group']):
-    """
-    Run a 2-way ANOVA when data['secondary_group'] is not empty
+# def run_two_way_anova(df, drop_cols=['sample'], subject='subject', group=['group', 'secondary_group']):
+#     """
+#     Run a 2-way ANOVA when data['secondary_group'] is not empty
 
-    :param df: processed pandas dataframe with samples as rows, and proteins and groups as columns.
-    :param list drop_cols: column names to drop from dataframe
-    :param str subject: column name containing subject identifiers.
-    :param list group: column names corresponding to independent variable groups
-    :return: Two dataframes, anova results and residuals.
+#     :param df: processed pandas dataframe with samples as rows, and proteins and groups as columns.
+#     :param list drop_cols: column names to drop from dataframe
+#     :param str subject: column name containing subject identifiers.
+#     :param list group: column names corresponding to independent variable groups
+#     :return: Two dataframes, anova results and residuals.
 
-    Example::
+#     Example::
 
-        result = run_two_way_anova(data, drop_cols=['sample'], subject='subject', group=['group', 'secondary_group'])
-    """
-    data = df.copy()
-    factorA, factorB = group
-    data = data.set_index([subject]+group)
-    data = data.drop(drop_cols, axis=1)
-    data.columns = data.columns.str.replace(r"-", "_")
+#         result = run_two_way_anova(data, drop_cols=['sample'], subject='subject', group=['group', 'secondary_group'])
+#     """
+#     data = df.copy()
+#     factorA, factorB = group
+#     data = data.set_index([subject]+group)
+#     data = data.drop(drop_cols, axis=1)
+#     data.columns = data.columns.str.replace(r"-", "_")
 
-    aov_result = []
-    residuals = {}
-    for col in data.columns:
-        model = ols('{} ~ C({})*C({})'.format(col, factorA, factorB), data[col].reset_index().sort_values(group, ascending=[True, False])).fit()
-        aov_table = sm.stats.anova_lm(model, typ=2)
-        eta_squared(aov_table)
-        omega_squared(aov_table)
-        for i in aov_table.index:
-            if i != 'Residual':
-                t, p, eta, omega = aov_table.loc[i, ['F', 'PR(>F)', 'eta_sq', 'omega_sq']]
-                protein = col.replace('_', '-')
-                aov_result.append((protein, i, t, p, eta, omega))
-        residuals[col] = model.resid
+#     aov_result = []
+#     residuals = {}
+#     for col in data.columns:
+#         model = ols('{} ~ C({})*C({})'.format(col, factorA, factorB), data[col].reset_index().sort_values(group, ascending=[True, False])).fit()
+#         aov_table = sm.stats.anova_lm(model, typ=2)
+#         eta_squared(aov_table)
+#         omega_squared(aov_table)
+#         for i in aov_table.index:
+#             if i != 'Residual':
+#                 t, p, eta, omega = aov_table.loc[i, ['F', 'PR(>F)', 'eta_sq', 'omega_sq']]
+#                 protein = col.replace('_', '-')
+#                 aov_result.append((protein, i, t, p, eta, omega))
+#         residuals[col] = model.resid
 
-    anova_df = pd.DataFrame(aov_result, columns = ['identifier','source', 'F-statistics', 'pvalue', 'eta_sq', 'omega_sq'])
-    anova_df = anova_df.set_index('identifier')
-    anova_df = anova_df.dropna(how="all")
+#     anova_df = pd.DataFrame(aov_result, columns = ['identifier','source', 'F-statistics', 'pvalue', 'eta_sq', 'omega_sq'])
+#     anova_df = anova_df.set_index('identifier')
+#     anova_df = anova_df.dropna(how="all")
 
-    return anova_df, residuals
+#     return anova_df, residuals
 
 def merge_for_polar(regulation_data, regulators, identifier_col='identifier', group_col='group', theta_col='modifier', aggr_func='mean', normalize=True):
     aggr_df = pd.DataFrame()
